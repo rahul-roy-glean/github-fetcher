@@ -12,6 +12,8 @@ A comprehensive data collection system for gathering GitHub repository statistic
 - ♻️ **Resume Capability**: Automatically resume failed collections from checkpoints
 - 🗂️ **Data Preservation**: Keep raw GitHub data in GCS for reingestion without re-fetching
 - 🔄 **Incremental Updates**: Efficient incremental collection for ongoing monitoring
+- ☁️ **Cloud Native**: Deploy as Cloud Function with Cloud Scheduler for automatic execution
+- 🔒 **Deduplication**: MERGE-based upserts prevent duplicate data in BigQuery
 - 📅 **Historical Backfill**: Support for backfilling historical data (e.g., last 6 months)
 - 🤖 **Bot-Aware**: Includes bot commits and properly attributes all contributions
 - 🏷️ **Label Support**: Captures PR labels including size labels
@@ -342,7 +344,36 @@ The rate limiter will automatically wait when:
 - Local request count exceeds configured limit
 - GitHub returns rate limit errors
 
-## Deployment
+## Cloud Deployment (GCP)
+
+Deploy as a **Cloud Function with Cloud Scheduler** for automatic hourly execution:
+
+```bash
+# Quick deploy with bash script
+export GCP_PROJECT_ID="your-project-id"
+export GITHUB_TOKEN="ghp_your_token_here"
+./deployment/deploy.sh
+```
+
+Or use **Terraform** for infrastructure as code:
+
+```bash
+cd deployment/terraform
+terraform init
+terraform apply
+```
+
+### Features
+
+- ✅ **Hourly Collection**: Runs every hour automatically
+- ✅ **Deduplication**: MERGE-based upserts prevent duplicates
+- ✅ **Serverless**: No infrastructure to manage
+- ✅ **Auto-scaling**: Scales automatically with workload
+- ✅ **Cost-effective**: ~$1-2/month total
+
+**📖 See [DEPLOYMENT.md](DEPLOYMENT.md) for complete deployment guide**
+
+## Local Deployment
 
 ### Running as a Service (systemd)
 
@@ -442,6 +473,19 @@ If resume isn't working:
 2. Check that checkpoint files exist in GCS at `org/_checkpoints/`
 3. Verify the collection ID format is correct (ISO timestamp)
 4. Review logs for checkpoint read errors
+
+### Duplicate Data
+
+The system uses MERGE statements (upserts) to prevent duplicates:
+- PRs are unique on `(pr_number, repository, organization)`
+- Commits are unique on `(sha, repository, organization)`
+- Reviews are unique on `(review_id, repository, organization)`
+- Comments are unique on `(comment_id, repository, organization)`
+
+If you still see duplicates:
+1. Verify you're using the latest version with upsert logic
+2. Check BigQuery table schema is correct
+3. Run manual deduplication query (see DEPLOYMENT.md)
 
 ## Contributing
 

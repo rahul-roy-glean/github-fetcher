@@ -44,6 +44,19 @@ logs/
 *.json
 !.gitkeep
 
+# Terraform
+deployment/terraform/.terraform/
+deployment/terraform/.terraform.lock.hcl
+deployment/terraform/terraform.tfstate
+deployment/terraform/terraform.tfstate.backup
+deployment/terraform/*.tfvars
+deployment/terraform/function.zip
+
+# Cloud Function temp files
+cloud_function/modules/
+cloud_function/utils/
+cloud_function/config.py
+
 # OS
 .DS_Store
 Thumbs.db

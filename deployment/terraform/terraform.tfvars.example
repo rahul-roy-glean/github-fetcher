@@ -1,0 +1,22 @@
+# Terraform Variables for GitHub Stats Collector
+
+# GCP Configuration
+project_id = "your-gcp-project-id"
+region     = "us-central1"
+
+# GitHub Configuration
+github_token = "ghp_your_github_token_here"
+github_org   = "askscio"
+
+# BigQuery Configuration
+bigquery_dataset_id = "github_stats"
+
+# GCS Configuration
+gcs_bucket_name = "github-stats-data"
+
+# Function Configuration
+function_name = "github-stats-collector"
+
+# Scheduler Configuration
+schedule  = "0 * * * *"  # Every hour at minute 0
+time_zone = "America/Los_Angeles"

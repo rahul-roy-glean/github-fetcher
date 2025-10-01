@@ -193,13 +193,32 @@ If a collection crashes:
 python main.py resume --collection-id 2025-01-01T12:00:00+00:00
 ```
 
+## Cloud Deployment (Recommended)
+
+For production, deploy to GCP Cloud Functions for automatic hourly collection:
+
+```bash
+# Quick deploy
+export GCP_PROJECT_ID="your-project-id"
+export GITHUB_TOKEN="ghp_your_token_here"
+./deployment/deploy.sh
+```
+
+This sets up:
+- ✅ Cloud Function (serverless)
+- ✅ Cloud Scheduler (runs hourly)
+- ✅ Automatic deduplication
+- ✅ ~$1-2/month cost
+
+**📖 See [DEPLOYMENT.md](DEPLOYMENT.md) for details**
+
 ## Next Steps
 
 1. **Review GCS data**: Run `gcs-summary` to see what was collected
-2. **Set up monitoring**: Track collection jobs and data freshness
-3. **Create dashboards**: Build visualizations in Looker/Data Studio
-4. **Calculate metrics**: Use the example queries in README.md
-5. **Schedule regular collections**: Set up the scheduled mode to run continuously
+2. **Set up cloud deployment**: Deploy to GCP for automatic hourly collection (see above)
+3. **Set up monitoring**: Track collection jobs and data freshness
+4. **Create dashboards**: Build visualizations in Looker/Data Studio
+5. **Calculate metrics**: Use the example queries in README.md
 6. **Understand GCS persistence**: Read [GCS_PERSISTENCE.md](GCS_PERSISTENCE.md)
 
 ## Support

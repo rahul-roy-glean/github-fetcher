@@ -216,8 +216,93 @@ class GitHubCollector:
         
         return rows
     
+    def _get_merge_key(self, table_id: str) -> List[str]:
+        """Get the unique key fields for a table"""
+        merge_keys = {
+            "pull_requests": ["pr_number", "repository", "organization"],
+            "commits": ["sha", "repository", "organization"],
+            "reviews": ["review_id", "repository", "organization"],
+            "review_comments": ["comment_id", "repository", "organization"],
+            "issue_comments": ["comment_id", "repository", "organization"],
+        }
+        return merge_keys.get(table_id, [])
+    
+    def _upsert_rows(self, table_id: str, rows: List[Dict[str, Any]]) -> int:
+        """Upsert rows into BigQuery table using MERGE to avoid duplicates"""
+        if not rows:
+            logger.info(f"No rows to upsert into {table_id}")
+            return 0
+        
+        table_ref = self.bq_schema.get_table_reference(table_id)
+        logger.info(f"Upserting {len(rows)} rows into {table_ref}")
+        
+        # Get merge keys for this table
+        merge_keys = self._get_merge_key(table_id)
+        if not merge_keys:
+            logger.warning(f"No merge keys defined for {table_id}, using insert")
+            return self._insert_rows(table_id, rows)
+        
+        # Create a temporary table with the new data
+        temp_table_id = f"{table_id}_temp_{int(datetime.now(timezone.utc).timestamp())}"
+        temp_table_ref = f"{self.config.bigquery_project_id}.{self.config.bigquery_dataset_id}.{temp_table_id}"
+        
+        try:
+            # Create temporary table with same schema
+            source_table = self.bq_client.get_table(table_ref)
+            temp_table = bigquery.Table(temp_table_ref, schema=source_table.schema)
+            temp_table = self.bq_client.create_table(temp_table)
+            
+            # Insert data into temporary table
+            errors = self.bq_client.insert_rows_json(temp_table_ref, rows)
+            if errors:
+                logger.error(f"Errors inserting into temp table: {errors}")
+                self.bq_client.delete_table(temp_table_ref)
+                return 0
+            
+            # Build MERGE query
+            merge_condition = " AND ".join([f"target.{key} = source.{key}" for key in merge_keys])
+            
+            # Get all column names from schema
+            columns = [field.name for field in source_table.schema]
+            update_set = ", ".join([f"{col} = source.{col}" for col in columns if col not in merge_keys])
+            insert_cols = ", ".join(columns)
+            insert_vals = ", ".join([f"source.{col}" for col in columns])
+            
+            merge_query = f"""
+            MERGE `{table_ref}` AS target
+            USING `{temp_table_ref}` AS source
+            ON {merge_condition}
+            WHEN MATCHED THEN
+                UPDATE SET {update_set}
+            WHEN NOT MATCHED THEN
+                INSERT ({insert_cols})
+                VALUES ({insert_vals})
+            """
+            
+            # Execute MERGE
+            query_job = self.bq_client.query(merge_query)
+            query_job.result()  # Wait for completion
+            
+            # Get number of rows affected
+            rows_affected = query_job.num_dml_affected_rows or len(rows)
+            
+            # Clean up temporary table
+            self.bq_client.delete_table(temp_table_ref)
+            
+            logger.info(f"Successfully upserted {rows_affected} rows into {table_id}")
+            return rows_affected
+            
+        except Exception as e:
+            logger.error(f"Error during upsert: {e}")
+            # Try to clean up temp table
+            try:
+                self.bq_client.delete_table(temp_table_ref)
+            except:
+                pass
+            return 0
+    
     def _insert_rows(self, table_id: str, rows: List[Dict[str, Any]]) -> int:
-        """Insert rows into BigQuery table"""
+        """Insert rows into BigQuery table (direct insert, may create duplicates)"""
         if not rows:
             logger.info(f"No rows to insert into {table_id}")
             return 0
@@ -351,25 +436,25 @@ class GitHubCollector:
         
         counts = {}
         
-        # Insert PRs
+        # Upsert PRs (avoid duplicates)
         pr_rows = self._prepare_pr_rows(all_prs)
-        counts['pull_requests'] = self._insert_rows('pull_requests', pr_rows)
+        counts['pull_requests'] = self._upsert_rows('pull_requests', pr_rows)
         
-        # Insert commits
+        # Upsert commits (avoid duplicates)
         commit_rows = self._prepare_commit_rows(all_prs)
-        counts['commits'] = self._insert_rows('commits', commit_rows)
+        counts['commits'] = self._upsert_rows('commits', commit_rows)
         
-        # Insert reviews
+        # Upsert reviews (avoid duplicates)
         review_rows = self._prepare_review_rows(all_prs)
-        counts['reviews'] = self._insert_rows('reviews', review_rows)
+        counts['reviews'] = self._upsert_rows('reviews', review_rows)
         
-        # Insert review comments
+        # Upsert review comments (avoid duplicates)
         review_comment_rows = self._prepare_review_comment_rows(all_prs)
-        counts['review_comments'] = self._insert_rows('review_comments', review_comment_rows)
+        counts['review_comments'] = self._upsert_rows('review_comments', review_comment_rows)
         
-        # Insert issue comments
+        # Upsert issue comments (avoid duplicates)
         issue_comment_rows = self._prepare_issue_comment_rows(all_prs)
-        counts['issue_comments'] = self._insert_rows('issue_comments', issue_comment_rows)
+        counts['issue_comments'] = self._upsert_rows('issue_comments', issue_comment_rows)
         
         logger.info(f"Publishing complete: {counts}")
         return counts
@@ -422,9 +507,9 @@ class GitHubCollector:
                     if blob_data and 'data' in blob_data:
                         all_rows.extend(blob_data['data'])
             
-            # Insert into BigQuery
+            # Upsert into BigQuery (avoid duplicates)
             if all_rows:
-                count = self._insert_rows(data_type, all_rows)
+                count = self._upsert_rows(data_type, all_rows)
                 counts[data_type] = count
             else:
                 counts[data_type] = 0
