@@ -1,0 +1,19 @@
+# Cloud Function Dependencies for GitHub Stats Collector
+
+# Cloud Functions Framework
+functions-framework>=3.0.0
+
+# GitHub API
+requests>=2.31.0
+urllib3>=2.0.0
+
+# Google Cloud Services
+google-cloud-bigquery>=3.11.0
+google-cloud-storage>=2.10.0
+
+# Utilities
+python-dateutil>=2.8.2
+
+# Flask (for HTTP functions)
+Flask>=2.3.0
+

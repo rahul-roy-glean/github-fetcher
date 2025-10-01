@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  github-collector:
+    build: .
+    container_name: github-collector
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account.json
+    volumes:
+      # Mount your GCP service account key
+      - ./credentials/service-account.json:/app/credentials/service-account.json:ro
+      # Mount logs directory (optional)
+      - ./logs:/app/logs
+    # Override command if needed
+    # command: python main.py backfill --days 180
+
