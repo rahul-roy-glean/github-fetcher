@@ -7,5 +7,8 @@ urllib3>=2.0.0
 # Google Cloud BigQuery
 google-cloud-bigquery>=3.11.0
 
+# Google Cloud Storage
+google-cloud-storage>=2.10.0
+
 # Utilities
 python-dateutil>=2.8.2

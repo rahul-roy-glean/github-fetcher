@@ -1,0 +1,263 @@
+GitHub Stats Collector - Project Structure
+==========================================
+
+Configuration Files
+-------------------
+config.py                           - Configuration management with GCS support
+.env.example                        - Environment variables template (includes GCS)
+.gitignore                          - Git ignore rules
+.dockerignore                       - Docker ignore rules
+
+Main Application
+----------------
+main.py                             - CLI entry point with 9 commands:
+                                      init, backfill, collect, scheduled,
+                                      load-gcs, gcs-summary, wipe-gcs, resume
+
+Core Modules
+------------
+modules/
+  __init__.py                       - Module initialization
+  fetcher.py                        - GitHub data fetcher (rate-limited)
+  schema.py                         - BigQuery schema management
+  collector.py                      - Collection orchestrator (with GCS persistence)
+
+Utility Modules
+---------------
+utils/
+  __init__.py                       - Module initialization
+  github_client.py                  - GitHub API client with rate limiting
+  storage.py                        - GCS storage operations (NEW!)
+
+Documentation
+-------------
+README.md                           - Main documentation (updated with GCS)
+QUICKSTART.md                       - Quick start guide (updated with GCS)
+GCS_PERSISTENCE.md                  - Complete GCS persistence guide (NEW!)
+CHANGES.md                          - Detailed changelog (NEW!)
+GCS_IMPLEMENTATION_SUMMARY.md       - Implementation summary (NEW!)
+PROJECT_STRUCTURE.txt               - This file (NEW!)
+
+Deployment
+----------
+requirements.txt                    - Python dependencies (includes google-cloud-storage)
+Dockerfile                          - Docker container definition
+docker-compose.yml                  - Docker Compose configuration
+
+Key Features by Module
+======================
+
+fetcher.py (250 lines)
+  - Fetch organization repositories
+  - Fetch PRs with all details
+  - Fetch commits, reviews, comments
+  - Parallel processing
+  - Graceful error handling
+
+schema.py (250 lines)
+  - Create BigQuery datasets
+  - Define table schemas
+  - Partitioning and clustering
+  - 6 tables: pull_requests, commits, reviews, 
+    review_comments, issue_comments, metrics
+
+collector.py (450 lines)
+  ✅ NEW: persist_to_gcs() - Save data to GCS in chunks
+  ✅ NEW: load_from_gcs_and_publish() - Load from GCS to BigQuery
+  ✅ ENHANCED: collect_and_publish() - With checkpoint/resume
+  - publish_to_bigquery() - Direct BigQuery insertion
+  - backfill() - Historical data collection
+  - incremental_collect() - Recent data collection
+
+storage.py (429 lines) - NEW!
+  - write_data_chunks() - Chunked file writing
+  - write_checkpoint() - Save collection progress
+  - read_checkpoint() - Load collection progress
+  - list_repositories() - List repos in GCS
+  - list_data_files() - List data files
+  - read_blob() - Read GCS data
+  - delete_repository_data() - Cleanup
+  - get_data_summary() - Storage statistics
+
+github_client.py (225 lines)
+  - RateLimiter class - Smart rate limiting
+  - GitHubClient class - API wrapper
+  - Retry logic with exponential backoff
+  - Paginated requests
+  - Rate limit tracking
+
+Commands Available
+==================
+
+Core Commands
+-------------
+python main.py init                                    # Initialize BigQuery
+python main.py backfill --days 180                    # Backfill 6 months
+python main.py collect --hours 24                     # Collect last 24h
+python main.py scheduled --interval 6                 # Run every 6h
+
+GCS Commands (NEW!)
+-------------------
+python main.py load-gcs                               # Load all from GCS
+python main.py load-gcs --repo frontend              # Load one repo
+python main.py load-gcs --date 2025-01-01            # Load by date
+python main.py gcs-summary                            # Show GCS contents
+python main.py wipe-gcs --repo my-repo --confirm     # Delete GCS data
+python main.py resume --collection-id <id>            # Resume failed run
+
+GCS Bucket Structure
+====================
+
+gs://github-stats-data/
+└── askscio/                                  # Organization
+    ├── frontend/                             # Repository
+    │   ├── pull_requests/                    # Data type
+    │   │   └── 2025-01-01/                  # Date partition
+    │   │       ├── timestamp_chunk_0.json   # Data chunks
+    │   │       └── timestamp_chunk_1.json
+    │   ├── commits/
+    │   ├── reviews/
+    │   ├── review_comments/
+    │   └── issue_comments/
+    ├── backend/
+    │   └── ... (same structure)
+    └── _checkpoints/                         # Resume checkpoints
+        └── collection-id.json
+
+Environment Variables
+=====================
+
+Required
+--------
+GITHUB_TOKEN                        # GitHub personal access token
+BIGQUERY_PROJECT_ID                 # GCP project ID
+
+GCS Configuration (NEW!)
+------------------------
+GCS_BUCKET_NAME                     # Bucket name (default: github-stats-data)
+GCS_CHUNK_SIZE                      # Items per file (default: 100)
+PERSIST_TO_GCS                      # Enable GCS (default: true)
+
+Optional
+--------
+GITHUB_ORG                          # Organization (default: askscio)
+BIGQUERY_DATASET_ID                 # Dataset (default: github_stats)
+BIGQUERY_LOCATION                   # Location (default: US)
+MAX_WORKERS                         # Parallel workers (default: 10)
+BATCH_SIZE                          # Batch size (default: 100)
+DEFAULT_LOOKBACK_DAYS               # Default backfill (default: 180)
+
+BigQuery Tables
+===============
+
+pull_requests
+  - PR metadata, state, metrics
+  - Partitioned by updated_at
+  - Clustered by org, repo, author
+
+commits
+  - Individual commits with attribution
+  - Partitioned by commit_date
+  - Clustered by org, repo, author
+
+reviews
+  - PR reviews with state
+  - Partitioned by submitted_at
+  - Clustered by org, repo, reviewer
+
+review_comments
+  - Line-by-line review comments
+  - Partitioned by created_at
+  - Clustered by org, repo, author
+
+issue_comments
+  - General PR comments
+  - Partitioned by created_at
+  - Clustered by org, repo, author
+
+metrics
+  - Derived velocity metrics
+  - Partitioned by metric_date
+  - Clustered by org, repo, author
+
+Dependencies
+============
+
+GitHub API
+----------
+requests>=2.31.0
+urllib3>=2.0.0
+
+Google Cloud
+------------
+google-cloud-bigquery>=3.11.0
+google-cloud-storage>=2.10.0        # NEW!
+
+Utilities
+---------
+python-dateutil>=2.8.2
+
+Service Account Permissions
+===========================
+
+BigQuery
+--------
+- bigquery.datasets.create
+- bigquery.tables.create
+- bigquery.tables.updateData
+- bigquery.jobs.create
+
+GCS (NEW!)
+----------
+- storage.buckets.create
+- storage.objects.create
+- storage.objects.get
+- storage.objects.delete
+- storage.objects.list
+
+Or use predefined roles:
+- BigQuery Data Editor
+- BigQuery Job User
+- Storage Object Admin
+
+Code Statistics
+===============
+
+Total Lines of Code: ~2,500
+  - fetcher.py:       ~400 lines
+  - collector.py:     ~520 lines
+  - schema.py:        ~270 lines
+  - storage.py:       ~430 lines (NEW!)
+  - github_client.py: ~230 lines
+  - main.py:          ~420 lines
+  - config.py:        ~65 lines
+
+Test Coverage: Manual testing required
+Documentation: Comprehensive (4 markdown files)
+
+Quick Start
+===========
+
+1. Install dependencies
+   pip install -r requirements.txt
+
+2. Configure environment
+   cp .env.example .env
+   # Edit .env with your tokens
+
+3. Set GCP credentials
+   export GOOGLE_APPLICATION_CREDENTIALS="path/to/key.json"
+
+4. Initialize BigQuery
+   python main.py init
+
+5. Run backfill (automatically uses GCS!)
+   python main.py backfill --days 180
+
+6. Check GCS
+   python main.py gcs-summary
+
+For detailed instructions, see:
+- QUICKSTART.md for step-by-step guide
+- README.md for complete documentation
+- GCS_PERSISTENCE.md for GCS features

@@ -37,6 +37,8 @@ GITHUB_TOKEN=ghp_your_github_token_here
 GITHUB_ORG=askscio
 BIGQUERY_PROJECT_ID=your-gcp-project
 BIGQUERY_DATASET_ID=github_stats
+GCS_BUCKET_NAME=github-stats-data
+PERSIST_TO_GCS=true
 ```
 
 ### 3. Set Google Cloud Credentials
@@ -162,15 +164,49 @@ Ensure your service account has these roles:
 2. Verify the organization name is correct
 3. Run with `-v` flag for verbose logging: `python main.py -v collect --hours 24`
 
+## GCS Persistence Features
+
+The collector automatically saves data to GCS before loading into BigQuery:
+
+### View what's in GCS
+
+```bash
+python main.py gcs-summary
+```
+
+### Reload data from GCS
+
+If you need to reprocess data:
+
+```bash
+# Wipe BigQuery data (manually via SQL)
+# Then reload from GCS:
+python main.py load-gcs
+```
+
+### Resume a failed collection
+
+If a collection crashes:
+
+```bash
+# Check logs for the collection ID
+python main.py resume --collection-id 2025-01-01T12:00:00+00:00
+```
+
 ## Next Steps
 
-1. **Set up monitoring**: Track collection jobs and data freshness
-2. **Create dashboards**: Build visualizations in Looker/Data Studio
-3. **Calculate metrics**: Use the example queries in README.md
-4. **Schedule regular collections**: Set up the scheduled mode to run continuously
+1. **Review GCS data**: Run `gcs-summary` to see what was collected
+2. **Set up monitoring**: Track collection jobs and data freshness
+3. **Create dashboards**: Build visualizations in Looker/Data Studio
+4. **Calculate metrics**: Use the example queries in README.md
+5. **Schedule regular collections**: Set up the scheduled mode to run continuously
+6. **Understand GCS persistence**: Read [GCS_PERSISTENCE.md](GCS_PERSISTENCE.md)
 
 ## Support
 
-For detailed documentation, see `README.md`.
+For detailed documentation, see:
+- `README.md` - Complete documentation
+- `GCS_PERSISTENCE.md` - GCS persistence layer details
+- `QUICKSTART.md` - This guide
 
 For issues or questions, open a GitHub issue.

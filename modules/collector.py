@@ -10,6 +10,7 @@ from google.cloud.exceptions import NotFound
 
 from config import Config
 from utils.github_client import GitHubClient
+from utils.storage import GCSStorage
 from modules.fetcher import GitHubFetcher, PullRequestData
 from modules.schema import BigQuerySchema
 
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class GitHubCollector:
-    """Collects GitHub data and publishes to BigQuery"""
+    """Collects GitHub data and publishes to BigQuery (optionally via GCS)"""
     
     def __init__(self, config: Config):
         self.config = config
@@ -32,6 +33,15 @@ class GitHubCollector:
             config.bigquery_location
         )
         self.bq_client = bigquery.Client(project=config.bigquery_project_id)
+        
+        # Initialize GCS storage if persistence is enabled
+        if config.persist_to_gcs:
+            self.storage = GCSStorage(
+                config.gcs_bucket_name,
+                config.bigquery_project_id
+            )
+        else:
+            self.storage = None
     
     def initialize_bigquery(self):
         """Initialize BigQuery dataset and tables"""
@@ -224,6 +234,103 @@ class GitHubCollector:
         logger.info(f"Successfully inserted {len(rows)} rows into {table_id}")
         return len(rows)
     
+    def persist_to_gcs(self, pr_data: Dict[str, List[PullRequestData]], 
+                      collection_id: Optional[str] = None) -> Dict[str, List[str]]:
+        """
+        Persist collected data to GCS
+        
+        Args:
+            pr_data: Dictionary mapping repository names to lists of PullRequestData
+            collection_id: Optional collection identifier for tracking
+        
+        Returns:
+            Dictionary with lists of blob paths per repository
+        """
+        if not self.storage:
+            raise ValueError("GCS storage not configured. Set persist_to_gcs=True")
+        
+        logger.info("Persisting data to GCS")
+        
+        if collection_id is None:
+            collection_id = datetime.now(timezone.utc).isoformat()
+        
+        blob_paths = {}
+        timestamp = collection_id
+        
+        for repo, pr_list in pr_data.items():
+            if not pr_list:
+                continue
+            
+            logger.info(f"Persisting {len(pr_list)} PRs for {repo}")
+            
+            # Convert PR data to dictionaries
+            pr_dicts = [pr.to_dict() for pr in pr_list]
+            
+            # Write PR data
+            pr_paths = self.storage.write_data_chunks(
+                self.config.github_org,
+                repo,
+                "pull_requests",
+                pr_dicts,
+                chunk_size=self.config.gcs_chunk_size,
+                timestamp=timestamp
+            )
+            
+            # Prepare and write commits
+            commit_rows = self._prepare_commit_rows(pr_list)
+            commit_paths = self.storage.write_data_chunks(
+                self.config.github_org,
+                repo,
+                "commits",
+                commit_rows,
+                chunk_size=self.config.gcs_chunk_size,
+                timestamp=timestamp
+            )
+            
+            # Prepare and write reviews
+            review_rows = self._prepare_review_rows(pr_list)
+            review_paths = self.storage.write_data_chunks(
+                self.config.github_org,
+                repo,
+                "reviews",
+                review_rows,
+                chunk_size=self.config.gcs_chunk_size,
+                timestamp=timestamp
+            )
+            
+            # Prepare and write review comments
+            review_comment_rows = self._prepare_review_comment_rows(pr_list)
+            review_comment_paths = self.storage.write_data_chunks(
+                self.config.github_org,
+                repo,
+                "review_comments",
+                review_comment_rows,
+                chunk_size=self.config.gcs_chunk_size,
+                timestamp=timestamp
+            )
+            
+            # Prepare and write issue comments
+            issue_comment_rows = self._prepare_issue_comment_rows(pr_list)
+            issue_comment_paths = self.storage.write_data_chunks(
+                self.config.github_org,
+                repo,
+                "issue_comments",
+                issue_comment_rows,
+                chunk_size=self.config.gcs_chunk_size,
+                timestamp=timestamp
+            )
+            
+            blob_paths[repo] = {
+                "pull_requests": pr_paths,
+                "commits": commit_paths,
+                "reviews": review_paths,
+                "review_comments": review_comment_paths,
+                "issue_comments": issue_comment_paths
+            }
+        
+        logger.info(f"Data persisted to GCS for {len(blob_paths)} repositories")
+        return blob_paths
+    
     def publish_to_bigquery(self, pr_data: Dict[str, List[PullRequestData]]) -> Dict[str, int]:
         """
         Publish collected data to BigQuery
@@ -267,23 +374,96 @@ class GitHubCollector:
         logger.info(f"Publishing complete: {counts}")
         return counts
     
+    def load_from_gcs_and_publish(self, repo: Optional[str] = None,
+                                  date_filter: Optional[str] = None) -> Dict[str, int]:
+        """
+        Load data from GCS and publish to BigQuery
+        
+        Args:
+            repo: Optional repository name to load (if None, load all)
+            date_filter: Optional date filter (YYYY-MM-DD)
+        
+        Returns:
+            Dictionary with counts of inserted rows per table
+        """
+        if not self.storage:
+            raise ValueError("GCS storage not configured")
+        
+        logger.info(f"Loading data from GCS for org: {self.config.github_org}")
+        
+        # Determine which repositories to process
+        if repo:
+            repos_to_process = [repo]
+        else:
+            repos_to_process = self.storage.list_repositories(self.config.github_org)
+        
+        logger.info(f"Processing {len(repos_to_process)} repositories")
+        
+        counts = {}
+        data_types = ["pull_requests", "commits", "reviews", "review_comments", "issue_comments"]
+        
+        for data_type in data_types:
+            all_rows = []
+            
+            for repo_name in repos_to_process:
+                # List all data files for this repo and data type
+                blob_paths = self.storage.list_data_files(
+                    self.config.github_org,
+                    repo_name,
+                    data_type,
+                    date_filter
+                )
+                
+                logger.info(f"Found {len(blob_paths)} {data_type} files for {repo_name}")
+                
+                # Read and accumulate data
+                for blob_path in blob_paths:
+                    blob_data = self.storage.read_blob(blob_path)
+                    if blob_data and 'data' in blob_data:
+                        all_rows.extend(blob_data['data'])
+            
+            # Insert into BigQuery
+            if all_rows:
+                count = self._insert_rows(data_type, all_rows)
+                counts[data_type] = count
+            else:
+                counts[data_type] = 0
+        
+        logger.info(f"Loaded and published data from GCS: {counts}")
+        return counts
+    
     def collect_and_publish(self,
                            since: Optional[datetime] = None,
                            until: Optional[datetime] = None,
-                           repo_filter: Optional[List[str]] = None) -> Dict[str, int]:
+                           repo_filter: Optional[List[str]] = None,
+                           collection_id: Optional[str] = None,
+                           resume: bool = False) -> Dict[str, int]:
         """
-        Collect data from GitHub and publish to BigQuery
+        Collect data from GitHub and publish to BigQuery (optionally via GCS)
         
         Args:
             since: Only collect data updated after this date
             until: Only collect data updated before this date
             repo_filter: Optional list of repository names to collect
+            collection_id: Optional collection identifier for tracking
+            resume: Whether to resume from a checkpoint
         
         Returns:
             Dictionary with counts of inserted rows per table
         """
         logger.info(f"Starting collection for organization: {self.config.github_org}")
         logger.info(f"Date range: {since} to {until}")
+        
+        if collection_id is None:
+            collection_id = datetime.now(timezone.utc).isoformat()
+        
+        # Check for resume
+        completed_repos = set()
+        if resume and self.storage:
+            checkpoint = self.storage.read_checkpoint(self.config.github_org, collection_id)
+            if checkpoint:
+                completed_repos = set(checkpoint.get('data', {}).get('completed_repos', []))
+                logger.info(f"Resuming collection. Already completed: {len(completed_repos)} repos")
         
         # Fetch data from GitHub
         pr_data = self.fetcher.fetch_organization_prs(
@@ -294,8 +474,32 @@ class GitHubCollector:
             repo_filter=repo_filter
         )
         
-        # Publish to BigQuery
-        counts = self.publish_to_bigquery(pr_data)
+        # Filter out already completed repos if resuming
+        if completed_repos:
+            pr_data = {repo: prs for repo, prs in pr_data.items() if repo not in completed_repos}
+            logger.info(f"After filtering completed repos: {len(pr_data)} repos remaining")
+        
+        # Persist to GCS if enabled
+        if self.config.persist_to_gcs and self.storage:
+            logger.info("Persisting data to GCS first")
+            blob_paths = self.persist_to_gcs(pr_data, collection_id)
+            
+            # Write checkpoint after persisting
+            checkpoint_data = {
+                "completed_repos": list(pr_data.keys()),
+                "collection_id": collection_id,
+                "since": since.isoformat() if since else None,
+                "until": until.isoformat() if until else None,
+                "blob_paths": blob_paths
+            }
+            self.storage.write_checkpoint(self.config.github_org, collection_id, checkpoint_data)
+            
+            # Now load from GCS and publish to BigQuery
+            logger.info("Loading from GCS and publishing to BigQuery")
+            counts = self.load_from_gcs_and_publish()
+        else:
+            # Direct publish to BigQuery (old behavior)
+            counts = self.publish_to_bigquery(pr_data)
         
         return counts
     

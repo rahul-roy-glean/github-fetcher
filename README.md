@@ -8,6 +8,9 @@ A comprehensive data collection system for gathering GitHub repository statistic
 - 🚀 **High Performance**: Parallel processing for fast data collection
 - ⚡ **Rate Limit Handling**: Intelligent GitHub API rate limit management
 - 📦 **BigQuery Integration**: Automatic schema creation and data publishing
+- 💾 **GCS Persistence**: Data is persisted to GCS buckets first for fault tolerance and reprocessing
+- ♻️ **Resume Capability**: Automatically resume failed collections from checkpoints
+- 🗂️ **Data Preservation**: Keep raw GitHub data in GCS for reingestion without re-fetching
 - 🔄 **Incremental Updates**: Efficient incremental collection for ongoing monitoring
 - 📅 **Historical Backfill**: Support for backfilling historical data (e.g., last 6 months)
 - 🤖 **Bot-Aware**: Includes bot commits and properly attributes all contributions
@@ -38,6 +41,32 @@ Orchestrates the collection and publishing process:
 - Supports backfill and incremental collection
 - Manages data transformation for BigQuery
 - Handles batch processing efficiently
+
+## GCS Persistence Layer (New!)
+
+The system now includes a persistence layer using Google Cloud Storage:
+
+```
+GitHub API → Collector → GCS Bucket → BigQuery
+                  ↓
+            Checkpoints
+```
+
+### Benefits
+
+- **Fault Tolerance**: Resume collection if the process crashes mid-run
+- **Data Preservation**: Keep raw GitHub data for reprocessing (e.g., schema changes)
+- **Flexibility**: Wipe BigQuery data and reload from GCS without re-fetching from GitHub
+- **Cost Efficiency**: Avoid hitting GitHub rate limits by reusing cached data
+
+### Key Features
+
+- Data automatically chunked into manageable JSON files in GCS
+- Checkpoints track progress for resume capability
+- Commands to load from GCS, view summaries, and wipe data
+- Organized by org/repo/data-type/date for easy navigation
+
+**📖 See [GCS_PERSISTENCE.md](GCS_PERSISTENCE.md) for detailed documentation**
 
 ## Installation
 
@@ -92,11 +121,24 @@ BIGQUERY_PROJECT_ID=your-gcp-project-id
 BIGQUERY_DATASET_ID=github_stats
 BIGQUERY_LOCATION=US
 
+# GCS Configuration
+GCS_BUCKET_NAME=github-stats-data
+GCS_CHUNK_SIZE=100
+PERSIST_TO_GCS=true
+
 # Performance Configuration (Optional)
 MAX_WORKERS=10
 BATCH_SIZE=100
 DEFAULT_LOOKBACK_DAYS=180
 ```
+
+### GCS Bucket
+
+The bucket specified in `GCS_BUCKET_NAME` will be created automatically if it doesn't exist. Your service account needs:
+- `storage.buckets.create` (for bucket creation)
+- `storage.objects.create`, `storage.objects.get`, `storage.objects.delete` (for object operations)
+
+Alternatively, grant the `Storage Object Admin` role.
 
 ### GitHub Token Permissions
 
@@ -164,6 +206,40 @@ Enable detailed logging for debugging:
 
 ```bash
 python main.py -v backfill --days 30
+```
+
+### GCS Operations
+
+Load data from GCS to BigQuery:
+
+```bash
+# Load all data from GCS
+python main.py load-gcs
+
+# Load specific repository
+python main.py load-gcs --repo frontend
+
+# Load data from specific date
+python main.py load-gcs --date 2025-01-01
+```
+
+View GCS storage summary:
+
+```bash
+python main.py gcs-summary
+```
+
+Wipe GCS data for a repository:
+
+```bash
+python main.py wipe-gcs --repo my-repo --confirm
+```
+
+Resume a failed collection:
+
+```bash
+# Check logs for collection ID, then resume
+python main.py resume --collection-id 2025-01-01T12:00:00+00:00
 ```
 
 ## BigQuery Schema
@@ -351,6 +427,21 @@ The system handles missing data gracefully:
 - Bot activity is included by default
 
 Check logs for warnings about specific data fetch failures.
+
+### GCS Permission Issues
+
+If you encounter GCS permission errors:
+1. Ensure service account has `Storage Object Admin` role
+2. Check that `GCS_BUCKET_NAME` is set correctly
+3. Verify the bucket exists or your account can create it
+
+### Resume Not Working
+
+If resume isn't working:
+1. Ensure `PERSIST_TO_GCS=true` is set
+2. Check that checkpoint files exist in GCS at `org/_checkpoints/`
+3. Verify the collection ID format is correct (ISO timestamp)
+4. Review logs for checkpoint read errors
 
 ## Contributing
 
